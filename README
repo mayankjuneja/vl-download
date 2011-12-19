@@ -1,0 +1,15 @@
+============================================
+		vl-download
+  		Version 0.1
+	videolectures.net video-download
+		Mayank Juneja
+	mayankjuneja1[AT]gmail[DOT]com
+============================================
+
+PREREQUISITES:
+  Python (>=2.7)  
+  BeautifulSoup,optparse (Python Modules)
+  rtmpdump (http://rtmpdump.mplayerhq.hu/)
+
+RUNNING
+  vl-download -u URL -o OUTFILE
