@@ -14,11 +14,12 @@ import re
 import os
 import sys
 from BeautifulSoup import BeautifulSoup
-from optparse      import OptionParser
+from optparse import OptionParser
+from operator import itemgetter
 
 # Script Description
 desc = "videolectures.net video downloader"
-vers = "0.1"
+vers = "0.2"
 # Initialize Option Parser
 parser = OptionParser(description=desc,version = vers)
 
@@ -34,7 +35,6 @@ parser.add_option("-o","--outfile",
                 help="Output file Name",
                 metavar="outfile")
 
-
 # Parse arguments
 (options,args) = parser.parse_args()
 
@@ -42,7 +42,6 @@ parser.add_option("-o","--outfile",
 if options.url is None:
         # No URL specified
         parser.error("--url option is required")
-
         sys.exit(1)
 if options.outfile is None :
         # Output file not specified
@@ -61,27 +60,88 @@ request_headers =  {
         'Cache-Control'		: 'max-age=0'
        }
 
+url = url.rstrip("/")
+metadata_url = url + "/video/1/smil.xml"
 
-req = urllib2.Request(url, None, request_headers)
+req = urllib2.Request(metadata_url, None, headers=request_headers)
 response = urllib2.urlopen(req)
 html_page = response.read()
 
 html_page = BeautifulSoup(html_page)
 
 ## Find the metadata (Author, Title, Date)
-metadata = html_page.findAll(id='vl_desc')[0]
-title  = metadata.findAll('h2')[0].contents[0].encode('ascii','ignore')
-author = metadata.findAll("div",{"class":"lec_data"})[0].findAll("a")[0].contents[0].encode('ascii','ignore')
+title = html_page.findAll('meta', {'name':'title'}) or ''
+author = html_page.findAll('meta', {'name':'author'}) or ''
+if title: title = title[0].get('content', '').encode('ascii','ignore')
+if author: author = author[0].get('content', '').encode('ascii','ignore')
 
-## Find the rtmp data
-rtmp_section = html_page.findAll('script')[5].contents[0]
-rtmp_path = re.findall('clip.url.*\n',rtmp_section)[0].split("=")[1][2:-3]
-rtmp_url  = re.findall('clip.netConnectionUrl.*\n',rtmp_section)[0].split("=")[1][2:-3]
+videos = []
+video_tags = html_page.findAll("video")
+for tag in video_tags:
+    video = {
+        'id' : int(tag.get('id', -1)),
+        'proto' : tag.get('proto', ''),
+        'width' : int(tag.get('width', -1)),
+        'height' : int(tag.get('height', -1)),
+        'size' : int(tag.get('size', -1)),
+        'ext' : tag.get('ext', ''),
+        'type' : tag.get('type', ''),
+        'src' : tag.get('src', ''),
+        'streamer' : tag.get('streamer', '')
+    }
+    videos.append(video)
 
-## Begin downloading
+# Get the videos with maximum size
+max_size = max(videos, key=itemgetter('size'))['size']
+videos = [video for video in videos if video['size'] == max_size]
+
+video_urls = {}
+for video in videos:
+    video_urls[video['proto']] = {
+        'streamer' :  video.get('streamer', ''),
+        'src' :  video.get('src', ''),
+        'ext' :  video.get('ext', '')
+    }
 
 if(outfile==""):
-	outfile = author.replace(" ","_") + "-" + title.replace(" ","_")
-cmd = ("rtmpdump -r %s -y %s -o \"%s.flv\"")%(rtmp_url, rtmp_path, outfile)
-os.system(cmd)
+    outfile = title.replace(" ","_") + "-" + author.replace(" ","_")
 
+print "Downloading video: ", outfile
+
+# Try for http
+if 'http' in video_urls.keys():
+    v = video_urls['http']
+    outfile = outfile + "." + v['ext']
+
+    req = urllib2.Request(v['src'], None, headers=request_headers)
+    u = urllib2.urlopen(req)
+    meta = u.info()
+    file_size = int(meta.getheaders("Content-Length")[0])
+    f = open(outfile, 'wb')
+
+    file_size_dl = 0
+    block_sz = 8192
+    while True:
+        buffer = u.read(block_sz)
+        if not buffer:
+            break
+        file_size_dl += len(buffer)
+        f.write(buffer)
+        status = r"Status: [%3.2f%%]" % (file_size_dl * 100. / file_size)
+        status = status + chr(8)*(len(status)+1)
+        print status,
+    f.close()
+
+# Try for rtmp
+elif 'rtmp' in video_urls.keys():
+    v = video_urls['rtmp']
+    outfile = outfile + "." + v['ext']
+    rtmp_path = v['streamer']
+    rtmp_url  = v['src']
+
+    cmd = ("rtmpdump -r %s -y %s -o \"%s.flv\"")%(rtmp_url, rtmp_path, outfile)
+    print cmd
+    os.system(cmd)
+
+else:
+    print "Could not find a supported protocol"
